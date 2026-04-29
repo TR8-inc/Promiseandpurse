@@ -27,7 +27,7 @@ export function RecipientsTable({
         )}
         {disbursements.top_recipients.map((r) => {
           const pct = (r.total_cad / max) * 100;
-          const url = `/?program=${programId}&fy=${fy}&q=${encodeURIComponent(r.recipient)}&tab=transactions`;
+          const url = `/?recipient=${encodeURIComponent(r.recipient)}`;
           return (
             <Link
               key={r.recipient}

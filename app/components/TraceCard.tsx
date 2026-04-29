@@ -16,14 +16,29 @@ type ProgramFlavor = {
   topRecipient?: { name: string; amount: number };
 };
 
+type CompanyFlavor = {
+  recipient: string;
+  total: number;
+  count: number;
+};
+
+type TopRow =
+  | { kind: "transaction"; data: TransactionFlavor; programLabel: string }
+  | { kind: "program"; data: ProgramFlavor }
+  | { kind: "company"; data: CompanyFlavor };
+
+const TRACE_LABELS: Record<TopRow["kind"], string> = {
+  transaction: "Transaction trace",
+  program: "Program trace",
+  company: "Company × program trace",
+};
+
 export function TraceCard({
   lineage,
   topRow,
 }: {
   lineage: LineageResult | null;
-  topRow:
-    | { kind: "transaction"; data: TransactionFlavor; programLabel: string }
-    | { kind: "program"; data: ProgramFlavor };
+  topRow: TopRow;
 }) {
   if (!lineage || !lineage.found) {
     return (
@@ -37,7 +52,7 @@ export function TraceCard({
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-6">
       <div className="mb-5">
         <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">
-          {topRow.kind === "transaction" ? "Transaction trace" : "Program trace"}
+          {TRACE_LABELS[topRow.kind]}
         </div>
         <div className="flex items-baseline gap-3 flex-wrap">
           <h2 className="text-2xl font-semibold text-zinc-100">
@@ -50,7 +65,7 @@ export function TraceCard({
       </div>
 
       <div className="space-y-3">
-        {topRow.kind === "transaction" ? (
+        {topRow.kind === "transaction" && (
           <Rung
             color="amber"
             kind="DISBURSEMENT"
@@ -64,7 +79,8 @@ export function TraceCard({
             id={topRow.data.id}
             note={`In ${topRow.programLabel}`}
           />
-        ) : (
+        )}
+        {topRow.kind === "program" && (
           <Rung
             color="amber"
             kind="DISBURSEMENTS"
@@ -72,6 +88,16 @@ export function TraceCard({
             secondary={`${topRow.data.count} agreement${topRow.data.count === 1 ? "" : "s"}`}
             tertiary={topRow.data.topRecipient ? `Top recipient: ${topRow.data.topRecipient.name} (${formatCAD(topRow.data.topRecipient.amount)})` : undefined}
             id={`${lineage.program_id}_${lineage.fy}_disb`}
+          />
+        )}
+        {topRow.kind === "company" && (
+          <Rung
+            color="amber"
+            kind="DISBURSEMENTS TO COMPANY"
+            primary={formatCADExact(topRow.data.total)}
+            secondary={topRow.data.recipient}
+            tertiary={`${topRow.data.count} agreement${topRow.data.count === 1 ? "" : "s"} in this program-year`}
+            id={`${lineage.program_id}_${lineage.fy}_${topRow.data.recipient.slice(0, 24)}`}
           />
         )}
 
@@ -180,29 +206,29 @@ function passageRefLabel(
 ): string {
   if (!ref) return kind === "estimates" ? "Estimates line" : kind === "budget" ? "Budget passage" : "Throne speech";
   if (kind === "estimates") {
-    const vote = ref.vote ?? ref.vote_number;
-    const fy = ref.fy_start;
+    const voteRaw = ref.vote ?? ref.vote_number;
+    const vote = voteRaw == null ? null : (typeof voteRaw === "string" && /^vote/i.test(voteRaw) ? voteRaw : `Vote ${voteRaw}`);
+    const fyLabel = ref.fy_label ?? (ref.fy_start ? `${ref.fy_start}–${(Number(ref.fy_start) + 1).toString().slice(2)}` : null);
     const amt = ref.amount;
-    const dept = ref.department;
     const parts = [
-      dept ? String(dept) : null,
-      vote ? `Vote ${vote}` : null,
-      fy ? `Estimates ${fy}–${(Number(fy) + 1).toString().slice(2)}` : null,
+      vote,
+      fyLabel ? `Estimates ${fyLabel}` : null,
       amt ? `$${Number(amt).toLocaleString()}` : null,
     ].filter(Boolean);
     return parts.join(" · ") || "Estimates line";
   }
   if (kind === "budget") {
     const year = ref.budget_year;
-    const page = ref.page;
+    const page = ref.page_num ?? ref.page;
     return [year ? `Budget ${year}` : null, page ? `p. ${page}` : null].filter(Boolean).join(" · ") || "Budget passage";
   }
   // throne
-  const parl = ref.parliament;
-  const sess = ref.session;
-  const date = ref.date;
+  const session = ref.session;
+  const date = ref.session_date ?? ref.date;
+  const heading = ref.heading;
   return [
-    parl && sess ? `Speech ${parl}-${sess}` : parl ? `Parliament ${parl}` : null,
+    session ? `Speech ${session}` : null,
     date ? String(date) : null,
+    heading ? `“${String(heading).slice(0, 60)}”` : null,
   ].filter(Boolean).join(" · ") || "Throne speech";
 }

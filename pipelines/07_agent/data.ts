@@ -206,6 +206,133 @@ export async function fetchTransactionTrace(disb_id: string): Promise<Transactio
   };
 }
 
+export type CompanyTrace = {
+  found: boolean;
+  recipient: string;
+  total_cad: number;
+  agreement_count: number;
+  programs: {
+    program_id: string;
+    short_name: string;
+    display_name: string;
+    fy: number;
+    total_cad: number;
+    agreement_count: number;
+    lineage: LineageResult;
+    signals: SignalsResult;
+  }[];
+  agreements: {
+    id: string;
+    ref_number: string | null;
+    program_id: string | null;
+    program_short: string | null;
+    fy: number;
+    amount_cad: number;
+    start_date: string | null;
+  }[];
+  fy_min: number | null;
+  fy_max: number | null;
+};
+
+export async function fetchCompanyTrace(recipient: string): Promise<CompanyTrace> {
+  const aggSql = `
+    SELECT
+      pr.program_id,
+      pr.short_name,
+      pr.display_name,
+      d.cal_year AS fy,
+      COUNT(*) AS n,
+      SUM(d.agreement_value) AS total_cad
+    FROM ${ds("raw_disbursements")} d
+    LEFT JOIN ${ds("program_registry")} pr
+      ON d.prog_name_en IN UNNEST(pr.aliases)
+    WHERE d.recipient_legal_name = @r
+    GROUP BY pr.program_id, pr.short_name, pr.display_name, d.cal_year
+    ORDER BY total_cad DESC
+  `;
+  const aggRows = await runQuery<{
+    program_id: string | null; short_name: string | null; display_name: string | null;
+    fy: number; n: number; total_cad: number;
+  }>(aggSql, { r: recipient });
+
+  if (aggRows.length === 0) {
+    return {
+      found: false,
+      recipient,
+      total_cad: 0,
+      agreement_count: 0,
+      programs: [],
+      agreements: [],
+      fy_min: null,
+      fy_max: null,
+    };
+  }
+
+  const agreementsSql = `
+    SELECT
+      d.disbursement_id AS id,
+      d.ref_number,
+      pr.program_id,
+      pr.short_name AS program_short,
+      d.cal_year AS fy,
+      d.agreement_value AS amount_cad,
+      d.agreement_start_date AS start_date
+    FROM ${ds("raw_disbursements")} d
+    LEFT JOIN ${ds("program_registry")} pr
+      ON d.prog_name_en IN UNNEST(pr.aliases)
+    WHERE d.recipient_legal_name = @r
+    ORDER BY d.agreement_value DESC
+    LIMIT 200
+  `;
+  const agreementRows = await runQuery<{
+    id: string;
+    ref_number: string | null;
+    program_id: string | null;
+    program_short: string | null;
+    fy: number;
+    amount_cad: number;
+    start_date: { value: string } | string | null;
+  }>(agreementsSql, { r: recipient });
+
+  // Resolve lineage + signals in parallel for each (program, fy) the recipient touches
+  const validPrograms = aggRows.filter((r): r is typeof r & { program_id: string; short_name: string; display_name: string } =>
+    r.program_id != null && r.short_name != null && r.display_name != null
+  );
+  const programs = await Promise.all(
+    validPrograms.map(async (r) => {
+      const [lineage, signals] = await Promise.all([
+        fetchLineage(r.program_id, r.fy),
+        fetchSignals(r.program_id, r.fy),
+      ]);
+      return {
+        program_id: r.program_id,
+        short_name: r.short_name,
+        display_name: r.display_name,
+        fy: r.fy,
+        total_cad: r.total_cad,
+        agreement_count: r.n,
+        lineage,
+        signals,
+      };
+    })
+  );
+
+  const fys = aggRows.map((r) => r.fy);
+  return {
+    found: true,
+    recipient,
+    total_cad: aggRows.reduce((s, r) => s + r.total_cad, 0),
+    agreement_count: aggRows.reduce((s, r) => s + r.n, 0),
+    programs,
+    agreements: agreementRows.map((a) => ({
+      ...a,
+      start_date: dateToString(a.start_date),
+    })),
+    fy_min: Math.min(...fys),
+    fy_max: Math.max(...fys),
+  };
+}
+
 export type GraphNode = {
   id: string;
   type: "throne" | "budget" | "estimates" | "program" | "recipient";

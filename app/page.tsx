@@ -1,220 +1,166 @@
-"use client";
+import { fetchLineage, fetchSignals, fetchDisbursements } from "../pipelines/07_agent/tools";
+import { fetchMatrix, fetchTransactionTrace, fetchCompanyTrace } from "../pipelines/07_agent/data";
+import { TraceCard } from "./components/TraceCard";
+import { CompanyTraceCard } from "./components/CompanyTraceCard";
+import { SignalsPanel } from "./components/SignalsPanel";
+import { RecipientsTable } from "./components/RecipientsTable";
+import { Navigators } from "./components/Navigators";
+import { ModeToggle } from "./components/ModeToggle";
+import { ChatDrawer } from "./components/ChatDrawer";
+import { GraphView } from "./components/GraphView";
 
-import { useChat } from "@ai-sdk/react";
-import { useState } from "react";
+export const dynamic = "force-dynamic";
 
-const SUGGESTED = [
-  "Why did Tesla receive $232M from Transport Canada in 2024?",
-  "What is the lineage of the National Trade Corridors Fund in 2024?",
-  "Show me the iZEV program signals for 2023.",
-  "Which TC programs have a missing Throne link?",
-];
+type SP = { [key: string]: string | string[] | undefined };
 
-type AnyPart = { type: string; text?: string; [k: string]: unknown };
-
-function renderText(parts: AnyPart[] | undefined, fallback: string | undefined): string {
-  if (parts && parts.length) {
-    return parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("");
-  }
-  return fallback ?? "";
+function pickStr(sp: SP, key: string): string | undefined {
+  const v = sp[key];
+  return Array.isArray(v) ? v[0] : v;
 }
 
-export default function Page() {
-  const [input, setInput] = useState("");
-  const { messages, status, sendMessage, error } = useChat({
-    onError: (e) => {
-      // surface in console too
-      console.error("[useChat]", e);
-    },
-  });
-  const busy = status === "streaming" || status === "submitted";
-
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const t = input.trim();
-    if (!t || busy) return;
-    sendMessage({ text: t });
-    setInput("");
-  };
-
-  const onSuggested = (s: string) => {
-    if (busy) return;
-    sendMessage({ text: s });
-  };
+export default async function Page({ searchParams }: { searchParams: Promise<SP> }) {
+  const sp = await searchParams;
+  const mode = (pickStr(sp, "mode") ?? "trace") as "trace" | "graph";
+  const program = pickStr(sp, "program") ?? "izev";
+  const fyStr = pickStr(sp, "fy") ?? "2024";
+  const fy = parseInt(fyStr, 10);
+  const disb_id = pickStr(sp, "disb_id");
+  const recipient = pickStr(sp, "recipient");
 
   return (
-    <main
-      style={{
-        maxWidth: 880,
-        margin: "0 auto",
-        padding: "32px 20px 120px",
-        color: "#1a1a1a",
-      }}
-    >
-      <header style={{ marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>
-          Policy Misalignment Agent — Transport Canada
-        </h1>
-        <p style={{ marginTop: 6, color: "#555", fontSize: 14 }}>
-          Throne Speech → Budget → Estimates → Disbursement. Every numeric claim cites a tool
-          result by [id].
-        </p>
-      </header>
+    <div className="min-h-screen flex flex-col">
+      <Header />
+      <main className="flex-1 px-5 sm:px-8 py-6 max-w-[1500px] w-full mx-auto">
+        {mode === "graph" ? (
+          <GraphView />
+        ) : (
+          <TraceMode program={program} fy={fy} disb_id={disb_id} recipient={recipient} />
+        )}
+      </main>
+    </div>
+  );
+}
 
-      {messages.length === 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
-            Try a canary question:
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {SUGGESTED.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => onSuggested(s)}
-                style={{
-                  textAlign: "left",
-                  width: "100%",
-                  padding: "10px 14px",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  background: "#fafafa",
-                  cursor: "pointer",
-                  fontSize: 14,
-                }}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+function Header() {
+  return (
+    <header className="px-5 sm:px-8 py-4 border-b border-zinc-800/80 flex items-center justify-between sticky top-0 bg-zinc-950/80 backdrop-blur z-30">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-7 h-7 rounded-md bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold mono">
+          P&P
         </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {messages.map((m) => {
-          const parts = (m as unknown as { parts?: AnyPart[] }).parts ?? [];
-          const fallbackContent = (m as unknown as { content?: string }).content;
-          const text = renderText(parts, fallbackContent);
-          const toolParts = parts.filter((p) =>
-            typeof p.type === "string" && (p.type.startsWith("tool-") || p.type === "dynamic-tool"),
-          );
-          return (
-            <div
-              key={m.id}
-              style={{
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #eee",
-                background: m.role === "user" ? "#f4f7ff" : "#fff",
-                fontSize: 14,
-                lineHeight: 1.55,
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "#888",
-                  marginBottom: 6,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
-                }}
-              >
-                {m.role === "user" ? "You" : "Agent"}
-              </div>
-              {text || (
-                <span style={{ color: "#aaa", fontStyle: "italic" }}>
-                  (no text part — {parts.length} part{parts.length === 1 ? "" : "s"}: {parts.map((p) => p.type).join(", ") || "—"})
-                </span>
-              )}
-              {toolParts.length > 0 && (
-                <details style={{ marginTop: 10 }}>
-                  <summary style={{ fontSize: 11, color: "#888", cursor: "pointer" }}>
-                    Tool calls ({toolParts.length})
-                  </summary>
-                  <pre style={{ fontSize: 11, color: "#666", overflow: "auto", marginTop: 6 }}>
-                    {toolParts
-                      .map((p) => `${p.type}\n${JSON.stringify(p, null, 2).slice(0, 800)}…`)
-                      .join("\n\n")}
-                  </pre>
-                </details>
-              )}
-            </div>
-          );
-        })}
-        {busy && (
-          <div style={{ fontSize: 12, color: "#888", padding: "8px 14px" }}>
-            thinking… (status: {status})
-          </div>
-        )}
-        {error && (
-          <div
-            style={{
-              padding: "12px 14px",
-              borderRadius: 10,
-              border: "1px solid #f4a8a8",
-              background: "#fff5f5",
-              color: "#8a1f1f",
-              fontSize: 13,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            <strong>Stream error:</strong> {error.message}
-          </div>
-        )}
-        {messages.length > 0 && (
-          <details style={{ marginTop: 4 }}>
-            <summary style={{ fontSize: 11, color: "#aaa", cursor: "pointer" }}>
-              debug · raw messages ({messages.length})
-            </summary>
-            <pre style={{ fontSize: 10, color: "#666", overflow: "auto", maxHeight: 320 }}>
-              {JSON.stringify(messages, null, 2)}
-            </pre>
-          </details>
-        )}
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-zinc-100 truncate">Promise &amp; Purse</div>
+          <div className="text-[11px] text-zinc-500 truncate">Trace federal dollars · Throne → Budget → Estimates → Disbursement</div>
+        </div>
       </div>
+      <div className="flex items-center gap-2">
+        <ModeToggle />
+        <ChatDrawer />
+      </div>
+    </header>
+  );
+}
 
-      <form
-        onSubmit={onSubmit}
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          padding: 16,
-          background: "linear-gradient(to top, #fff 70%, transparent)",
-        }}
-      >
-        <div style={{ maxWidth: 880, margin: "0 auto", display: "flex", gap: 8 }}>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about a TC program-year…"
-            style={{
-              flex: 1,
-              padding: "10px 12px",
-              borderRadius: 8,
-              border: "1px solid #ccc",
-              fontSize: 14,
-            }}
-          />
-          <button
-            type="submit"
-            disabled={busy || !input.trim()}
-            style={{
-              padding: "10px 16px",
-              borderRadius: 8,
-              border: "1px solid #2d3a8c",
-              background: "#2d3a8c",
-              color: "#fff",
-              fontSize: 14,
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
-          >
-            {busy ? "…" : "Send"}
-          </button>
+async function TraceMode({
+  program,
+  fy,
+  disb_id,
+  recipient,
+}: {
+  program: string;
+  fy: number;
+  disb_id?: string;
+  recipient?: string;
+}) {
+  // Company trace (?recipient=…) takes priority — its top program drives the sidebar.
+  const matrix = await fetchMatrix();
+
+  if (recipient) {
+    const company = await fetchCompanyTrace(recipient);
+    const top = company.programs[0];
+    const sidebarProgram = top?.program_id ?? program;
+    const sidebarFy = top?.fy ?? fy;
+    const sidebarDisbs = await fetchDisbursements(sidebarProgram, sidebarFy, 10);
+    const sidebarSignals = top?.signals ?? (await fetchSignals(sidebarProgram, sidebarFy));
+
+    return (
+      <div className="space-y-6">
+        <div className="grid lg:grid-cols-[1fr_360px] gap-6">
+          <div className="space-y-6 min-w-0">
+            <CompanyTraceCard trace={company} />
+            <Navigators cells={matrix} />
+          </div>
+          <aside className="space-y-6">
+            <SignalsPanel signals={sidebarSignals} />
+            <RecipientsTable disbursements={sidebarDisbs} programId={sidebarProgram} fy={sidebarFy} />
+          </aside>
         </div>
-      </form>
-    </main>
+      </div>
+    );
+  }
+
+  const txTracePromise = disb_id ? fetchTransactionTrace(disb_id) : null;
+  const lineagePromise = fetchLineage(program, fy);
+  const signalsPromise = fetchSignals(program, fy);
+  const disbsPromise = fetchDisbursements(program, fy, 10);
+
+  const [txTrace, lineageDirect, signalsDirect, disbs] = await Promise.all([
+    txTracePromise,
+    lineagePromise,
+    signalsPromise,
+    disbsPromise,
+  ]);
+
+  const lineage = txTrace?.found && txTrace.lineage ? txTrace.lineage : lineageDirect;
+  const signals = txTrace?.found && txTrace.signals ? txTrace.signals : signalsDirect;
+  const effectiveProgram = txTrace?.program_id ?? program;
+  const effectiveFy = txTrace?.fy ?? fy;
+  const finalDisbs =
+    txTrace?.found && txTrace.program_id && txTrace.program_id !== program
+      ? await fetchDisbursements(txTrace.program_id, txTrace.fy ?? fy, 10)
+      : disbs;
+
+  const programLabel = lineage.found ? `${lineage.display_name} · FY ${effectiveFy}` : effectiveProgram;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid lg:grid-cols-[1fr_360px] gap-6">
+        <div className="space-y-6 min-w-0">
+          <TraceCard
+            lineage={lineage}
+            topRow={
+              txTrace?.found && txTrace.disbursement
+                ? {
+                    kind: "transaction",
+                    data: {
+                      id: txTrace.disbursement.id,
+                      ref_number: txTrace.disbursement.ref_number,
+                      recipient: txTrace.disbursement.recipient,
+                      amount_cad: txTrace.disbursement.amount_cad,
+                      start_date: txTrace.disbursement.start_date,
+                      purpose: txTrace.disbursement.purpose,
+                    },
+                    programLabel,
+                  }
+                : {
+                    kind: "program",
+                    data: {
+                      total: finalDisbs.calendar_year_total_cad,
+                      count: finalDisbs.agreement_count,
+                      topRecipient: finalDisbs.top_recipients[0]
+                        ? { name: finalDisbs.top_recipients[0].recipient, amount: finalDisbs.top_recipients[0].total_cad }
+                        : undefined,
+                    },
+                  }
+            }
+          />
+          <Navigators cells={matrix} />
+        </div>
+        <aside className="space-y-6">
+          <SignalsPanel signals={signals} />
+          <RecipientsTable disbursements={finalDisbs} programId={effectiveProgram} fy={effectiveFy} />
+        </aside>
+      </div>
+    </div>
   );
 }
